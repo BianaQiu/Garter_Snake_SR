@@ -1,0 +1,92 @@
+/* ------ Palette ------ */
+:root {
+  --white:           #fffffc;
+  --cream:           #FDFEEE;
+  --raw-umber:       #816A41;
+  --leopard-black:   #2E2C20;
+  --reddish-brown:   #723509;
+  --forest:          #414833;
+  --light-forest:    #a4ac86;
+}
+
+/* ------ Background and Text Color ------ */
+body {
+  background-color: var(--cream);
+  color:  var(--leopard-black);
+  font-family: Geneva, sans-serif;
+}
+
+/* ------ Code Chunk ------ */
+div.cell {
+  margin-top: .5em;
+}
+
+/* ------ Headings ------ */
+h1 {
+  color: var(--forest);
+  border-bottom: 3px solid var(--forest);
+  padding-bottom: 0.2em;
+  margin-top: 1.2em;
+  font-family: Avante Garde, serif;
+}
+
+h2 {
+  color: var(--raw-umber);
+  border-bottom: 1px solid var(--light-forest);
+  font-family: Avante Garde, serif;
+}
+
+h3 {
+  color: var(--raw-umber);
+  font-family: Avante Garde, serif;
+}
+
+/* ----- Table of Content ------ */
+#TOC a {
+  color: var(--reddish-brown);
+}
+
+/* ----- Note Box ------ */
+
+div.callout-note {
+  background-color: var(--white);
+  border: 3px dotted var(--light-forest);
+  border-radius: 12px;
+}
+
+.callout .callout-body {
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1.5;
+}
+
+/* ----- Generated Graphs ------ */
+.cell-output-display {
+  border: 2px solid var(--light-forest);
+  padding: 6px;
+  border-radius: 10px;
+}
+
+.cell-output-display .figure,
+.cell-output-display figure {
+  margin-bottom: 0;
+}
+
+.cell-output-display img,
+.cell-output-display svg {
+  display: block;
+  margin-bottom: 0;
+}
+
+/* ----- Visual Footer ------ */
+body::after {
+  content: "© 2026 Garter Snake Occupancy";
+  display: block;
+  text-align: center;
+  padding: 25px;
+  margin-top: 30px;
+  background-color: var(--raw-umber);
+  color: var(--cream);
+  font-size: 13px;
+}

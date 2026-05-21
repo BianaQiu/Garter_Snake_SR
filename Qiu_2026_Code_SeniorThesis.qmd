@@ -1,0 +1,1715 @@
+---
+title: "Land Lab Garter Snake Analysis in R"
+author: "Biana Qiu"
+date: "2026-04-27"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    css: BQ_custom.css
+    self-contained: true
+    code-fold: true
+    code-summary: "Open Code"
+    code-tools: true
+execute: 
+  echo: true
+  warning: false
+  message: false
+number-sections: true
+---
+
+This is the code ran for Biana Qiu's 2026 senior research project: The effects of habitat variables on site occupancy of the Common Gartersnake (Thamnophis sirtalis) on a restored prairie/wetland complex. Analysis ran on data gathered by Geoffrey R. Smith, Wesley O. Smith and many others throughout 2016-2025 in the Granville Schools Land Lab. Analysis contains single- and multi-season/dynamic occupancy using package 'unmarked.'
+
+### Libraries
+
+```{r}
+#install.packages("tidyverse")
+library(tidyverse) #for data organization and graphing
+#install.packages("magrittr")
+#library(magrittr) #for piping and data manipulation
+#install.packages("corrplot")
+library(corrplot) #for correlation plots
+#install.packages("unmarked")
+library(unmarked) #for occupancy analysis
+#install.packages("AICcmodavg")
+library(AICcmodavg) #for AICc models
+#install.packages("data.table")
+library(data.table) #For matrix formatting
+#install.packages("ggalluvial")
+library(ggalluvial) #For Sankey Diagram
+
+setwd("~/Documents/GitHub/Garter_Snake_SR/GS_Analysis_Final")
+```
+
+### Datasets
+
+```{r}
+date = read.csv("Data_Tables/Dates.csv") #List of all surveyed dates
+
+site = read.csv(file = "Data_Tables/Sites.csv") #List of all surveyed grids with lat/long
+
+habitat <- read.csv(file = "Data_Tables/Hab_Covariates.csv") #habitat/site covariates at each grid
+
+snake = read.csv(file = "Data_Tables/Snake_Capture_Data.csv") #records of individual captures of garter snakes
+
+weather = read.csv(file = "Data_Tables/Newark_Airport_Weather.csv") #monthly weather data from the Licking County Regional Airport in Heath, Ohio from NOAA
+```
+
+## Exploratory Analysis and Data Formatting
+
+These are diagnostic checks before running occupancy analysis. Covariates were collected in 2018, 2022 (fewer variables), 2019, and 2024.
+
+### Site Covariate Correlation Plots
+
+Checking to see if variables are too similar to prevent multicollinearity.
+
+```{r}
+#Separating habitat covariates by year
+habitat_2024 <- habitat %>% 
+  filter(Year == 2024) #filtering out 2024
+
+habitat_2022 <- habitat %>% 
+  filter(Year == 2022) #filtering out 2022
+
+habitat_2019 <- habitat %>% 
+  filter(Year == 2019) #filtering out 2019
+
+habitat_2018 <- habitat %>% 
+  filter(Year == 2018) #filtering out 2018
+
+#Excluding categorical or missing columns - Pearson's correlation only runs with continuous variables. 
+#Note: Distance variables should be binned due to some values being >50m, but for this, I will treat them as numerical variables to run correlation plots - there will be an underestimation leading to some bias, but this analysis is exploratory.
+n_Habitat_2024 <- habitat_2024 %>% select(-Habitat_Type, -Grid, -Year)
+n_Habitat_2022 <- habitat_2022 %>% select(Trees, Distance_to_Trail_m, Distance_to_Water_m)
+n_Habitat_2019 <- habitat_2019 %>% select(-Habitat_Type, -Grid, -Year)
+n_Habitat_2018 <- habitat_2018 %>% select(-Habitat_Type, -Grid, -Year)
+
+#Pearson's correlation matrix for each year
+hab_corr_2024 <- cor(n_Habitat_2024)
+hab_corr_2022 <- cor(n_Habitat_2022)
+hab_corr_2019 <- cor(n_Habitat_2019)
+hab_corr_2018 <- cor(n_Habitat_2018)
+
+#Correlation plots for habitat variables for each year
+corrplot(hab_corr_2024, 
+         type = "upper", 
+         order = "original", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         main = "2024", 
+         mar=c(1,1,1,1),
+         family = "serif"
+         )
+
+corrplot(hab_corr_2022, 
+         type = "upper", 
+         order = "original", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         main = "2022", 
+         mar=c(1,1,1,1),
+         family = "serif"
+         )
+
+corrplot(hab_corr_2019, 
+         type = "upper", 
+         order = "original", 
+         tl.col = "black", 
+         tl.srt = 45, main = "2019", 
+         mar=c(1,1,1,1),
+         family = "serif"
+         )
+
+corrplot(hab_corr_2018, 
+         type = "upper", 
+         order = "original", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         main = "2018", 
+         mar=c(1,1,1,1),
+         family = "serif"
+         )
+
+```
+
+::: callout-note
+Since all the correlations are between 0.8 and -0.8, each variable can be run independently.
+:::
+
+### Site Covariate Boxplots
+
+Checking to that fixed covariates (distance to water/distance to land) are the same across years and yearly covariates have variations throughout the years.
+
+```{r}
+#Boxplots for each covariate
+
+ggplot(habitat, aes(x = Grid, y = Litter_Depth_cm)) + 
+  geom_boxplot() +
+  theme_minimal()
+  
+ggplot(habitat, aes(x = Grid, y = Max_Veg_Height_cm)) + 
+  geom_boxplot() +
+  theme_minimal()
+
+ggplot(habitat, aes(x = Grid, y = Trees)) + 
+  geom_boxplot() +
+  theme_minimal()
+
+ggplot(habitat, aes(x = Grid, y = Distance_to_Trail_m)) + 
+  geom_boxplot() +
+  theme_minimal() #same for all years
+
+ggplot(habitat, aes(x = Grid, y = Distance_to_Water_m)) + 
+  geom_boxplot() +
+  theme_minimal() #same for all years
+
+#The data spread for trees is really wide (especially since tree number should not change that much) mostly due to 2022 so making a new table without 2022
+n_habitat <- habitat %>% 
+  filter(Year %in% c(2018, 2019, 2024))
+
+#Boxplot of number of trees without 2022
+ggplot(n_habitat, aes(x = Grid, y = Trees)) + 
+  geom_boxplot() +
+  theme_minimal()
+```
+
+::: callout-note
+Boxplots showed that some variables had a lot of variation, especially evident in trees, likely due to confusions between shrub and tree. Some of the original tree values were modified from original data in Grid G5 and E3 due to known miscounts of shrubs for trees, but there might be more inconsistencies in measurements across years that were not caught.
+
+2022 especially had a high count of trees compared to other years and numbers across each of the 4 coverboards within a grid were the same rather than measured coverboard by coverboard, so 2022 will be omitted from using yearly variables in multi-season modelling.
+:::
+
+### Changes in Habitat Type over Time Plots
+
+```{r}
+#Tile plot of how Habitat Type changes for each coverboard across years
+habitat %>%
+  filter(Habitat_Type != "") %>% #since many years don't have measured hab type
+  ggplot(aes(x = Year, y = Grid, fill = Habitat_Type)) +
+  geom_tile(color = "black") + 
+  scale_fill_manual( name = "Habitat Type",
+                     values = c("Forb" = "#F2B50B", 
+                               "Grass/Forb" = "#FFD8DF", 
+                               "Grass" = "#D8E983", 
+                               "Wetland" = "skyblue"),
+                     ) +
+  theme_minimal()
+
+#Sankey plot of the number and trend in changes of Habitat Type across years
+Hab_sankey_plot <- habitat %>%
+  filter(Habitat_Type != "") %>% #since many years don't have measured hab type
+  ggplot(aes(x = Year, stratum = Habitat_Type, alluvium = Grid, 
+  fill = Habitat_Type)) +
+  geom_flow(alpha = 0.6, na.rm = TRUE) +
+  geom_stratum() + 
+  scale_fill_manual( name = "Habitat Type",
+                     values = c("Forb" = "#F2B50B", 
+                               "Grass/Forb" = "#FFAAB8", 
+                               "Grass" = "#D8E983", 
+                               "Wetland" = "skyblue")) +
+  theme_minimal(base_family = "serif") +
+  theme(
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16),
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 18)
+  )
+
+Hab_sankey_plot
+
+#saving image for thesis
+ggsave("Hab_sankey_plot.png", plot = Hab_sankey_plot, width = 10, height = 6, units = "in", dpi = 800)
+```
+
+::: callout-note
+Some of these changes over time might be due to inconsistencies in measurements with different observers.
+:::
+
+### Abundance Graph
+
+```{r}
+
+snake_n <- snake %>%
+  filter(Year != 2016) #removing 2016
+
+abundance_sum <- snake_n %>%
+  group_by(Year) %>%
+  summarise(Abundance = n(), .groups = "drop") #summing numbers for abundance by year
+
+#Abundance plot
+ggplot(abundance_sum, aes(x = Year, y = Abundance)) +
+  geom_line(color = "mistyrose1", linewidth = 3) +
+  geom_point(color = "mistyrose3", size = 4) + 
+  scale_x_continuous(breaks = seq(min(abundance_sum$Year),
+                                  max(abundance_sum$Year),
+                                  by = 1)) + 
+  scale_y_continuous(
+    limits = c(0, NA)  #so y axis starts at 0
+  ) +
+  labs(
+    x = "Year",
+    y = "Abundance"
+  ) +
+  theme_minimal(base_family = "serif") +
+  theme(
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16),
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 18)
+  )
+```
+
+## Dataset Modification
+
+Modifying datasets before analysis and making detection table.
+
+### Binning a Distance Variable
+
+```{r}
+#Binning distance to water since there was already binned value (over 50m)
+habitat <- habitat %>%
+  mutate(Water_Bin = case_when(
+    Distance_to_Water_m <= 10 ~ "0–10",
+    Distance_to_Water_m <= 25 ~ "11–25",
+    Distance_to_Water_m <= 49 ~ "26–49",
+    Distance_to_Water_m == 50 ~ "50+"
+  ))
+#converting new binned variable to factor
+habitat$Water_Bin <- as.factor(habitat$Water_Bin)
+
+#checking the order is right
+levels(habitat$Water_Bin)
+```
+
+### Table with Total Effort and Detections from Snake Capture Data
+
+```{r}
+#Making sure R reads the Full_Date column in both tables as a date
+date$Full_Date <- as.Date(date$Full_Date, format = "%m/%d/%y")
+snake$Full_Date <- as.Date(snake$Full_Date, format = "%m/%d/%y")
+
+#Adding a column of month and year to bin into months for multi-season analysis
+date <- date %>%
+  mutate(Month_Year = format(Full_Date, "%m-%Y"))
+
+#New table of total efforts of each checked date with all 29 grids using tidyr by adding every variable in date into effort_grid treating each row as a unit so nothing gets misaligned
+effort_grid <- crossing(
+  Grid = site$Grid,
+  date
+)
+
+#Detection table using each row of effort_grid and snake capture data for 0/1 (presence-absence) by gridpoint by date
+detection <- effort_grid %>%
+  left_join(
+    snake %>%
+      distinct(Grid, Full_Date) %>%
+      mutate(Detection = 1),
+    by = c("Grid", "Full_Date")
+  ) %>% 
+  mutate(Detection = ifelse(is.na(Detection), 0, Detection))
+
+head(detection)
+```
+
+::: callout-note
+The 'detection' column is 0 if no snake was detected at the site and a 1 if at least 1 snake was detected at the site. All of the detection matrices required for occupancy analysis will be generated from this.
+:::
+
+## Single-Season Occupancy
+
+Occupancy analysis with and without habitat covariates for each year. Every year will be run with the fixed distance covariates. 2022 will be run with number of trees within 10mas well. 2024, 2019, and 2018 will be run with all of the site covariates since only those years have full habitat surveys. The code will be repetitive.
+
+### 2025
+
+```{r}
+#Filtering out only dates in 2025
+detection25 <- detection %>% 
+  filter(Year == 2025)
+
+nrow(detection25) #should be 841 rows and there are 29 grids so 2025 has 29 sampling days
+
+n_detection25 <- detection25 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix25 <- n_detection25 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2025
+habitat_2025 <- habitat %>% 
+  filter(Year == 2025)
+
+#Null model
+umf_25 <- unmarkedFrameOccu(
+  y = det_matrix25,
+  siteCovs = habitat_2025
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_25) #checking
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_25 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_25)
+
+summary(m0_25) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_25, type = "det")    #Detection
+backTransform(m0_25, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_25, type = "det")) #Detection
+confint(backTransform(m0_25, type = "state")) #Occupancy
+
+#Detection only models
+det_models_25 <- list(
+  null = occu(~1 ~1, data = umf_25),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_25),
+  d_water = occu(~Water_Bin ~1, data = umf_25),
+  d_water_trail = occu(~Water_Bin+Distance_to_Trail_m ~1, data = umf_25)
+  ) #List of models for 2025
+
+aictab(cand.set = det_models_25) #Ranks models via aicc
+
+#Adding fixed habitat covariates with null occupancy.
+occu_models_25 <- list(
+  o_null = occu(~1 ~1, data = umf_25),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_25),
+  o_water = occu(~1 ~Water_Bin, data = umf_25),
+  o_water_trail = occu(~1 ~Distance_to_Trail_m + Water_Bin, data = umf_25)
+  ) #List of models for 2025
+
+aictab(cand.set = occu_models_25) #Ranks models via aicc
+
+```
+
+### 2024
+
+```{r}
+#Filtering out only dates in 2024
+detection24 <- detection %>% 
+  filter(Year == 2024)
+
+nrow(detection24) #should be 841 rows and there are 29 grids so 2024 has 29 sampling days
+
+n_detection24 <- detection24 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix24 <- n_detection24 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2024
+habitat_24 <- habitat %>% 
+  filter(Year == 2024)
+
+#Null model
+umf_24 <- unmarkedFrameOccu(
+  y = det_matrix24,
+  siteCovs = habitat_24
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_24) #checking
+
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_24 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_24)
+
+summary(m0_24) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_24, type = "det")    #Detection
+backTransform(m0_24, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_24, type = "det")) #Detection
+confint(backTransform(m0_24, type = "state")) #Occupancy
+
+#Testing fixed habitat covariates with detection
+det_models_24 <- list(
+  null = occu(~1 ~1, data = umf_24),
+  d_veg = occu(~Max_Veg_Height_cm ~1, data = umf_24),
+  d_tree = occu(~Trees ~1, data = umf_24),
+  d_hab = occu(~Habitat_Type ~1, data = umf_24),
+  d_litter = occu(~Litter_Depth_cm ~1, data = umf_24),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_24),
+  d_water = occu(~Water_Bin ~1, data = umf_24)
+)
+
+aictab(cand.set = det_models_24) #Ranks models via aicc
+
+#Testing fixed habitat covariates with occupancy.
+occu_models_24 <- list(
+  null = occu(~1 ~1, data = umf_24),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_24),
+  o_water = occu(~1 ~Water_Bin, data = umf_24),
+  o_habitat = occu(~1 ~Habitat_Type, data = umf_24),
+  o_litter = occu(~1 ~Litter_Depth_cm, data = umf_24),
+  o_veg = occu(~1 ~Max_Veg_Height_cm, data = umf_24),
+  o_tree = occu(~1 ~Trees, data = umf_24)
+  ) #List of models for 2024
+
+aictab(cand.set = occu_models_24) #Ranks models via aicc
+
+#Adding fixed habitat covariates with occupancy with best fit detection model: habitat type
+models_24 <- list(
+  null = occu(~1 ~1, data = umf_24),
+  trail = occu(~Habitat_Type ~Distance_to_Trail_m, data = umf_24),
+  water = occu(~Habitat_Type ~Water_Bin, data = umf_24),
+  habitat = occu(~Habitat_Type ~Habitat_Type, data = umf_24),
+  litter = occu(~Habitat_Type ~Litter_Depth_cm, data = umf_24),
+  veg = occu(~Habitat_Type ~Max_Veg_Height_cm, data = umf_24),
+  tree = occu(~Habitat_Type ~Trees, data = umf_24)
+  ) #List of models for 2024
+
+aictab(cand.set = models_24) #Ranks models via aicc
+
+litter = occu(~Habitat_Type ~Litter_Depth_cm, data = umf_24)
+litter
+predict(litter, type = "state")
+predict(litter, type = "det")
+```
+
+```{r}
+#best fit model for 2024
+best_24 = occu(~Habitat_Type ~Litter_Depth_cm, data = umf_24)
+
+best_24 <- predict(best_24, type = "state")  #Occupancy
+
+#Add grid as a column
+best_24$Grid <- habitat_24$Grid
+```
+
+### 2023
+
+```{r}
+#Filtering out only dates in 2023
+detection23 <- detection %>% 
+  filter(Year == 2023)
+
+nrow(detection23) #should be 812 rows and there are 29 grids so 2023 has 28 sampling days
+
+n_detection23 <- detection23 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix23 <- n_detection23 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2023
+habitat_23 <- habitat %>% 
+  filter(Year == 2023)
+
+#Null model
+umf_23 <- unmarkedFrameOccu(
+  y = det_matrix23,
+  siteCovs = habitat_23
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_23) #checking
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_23 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_23)
+
+summary(m0_23) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_23, type = "det")    #Detection
+backTransform(m0_23, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_23, type = "det")) #Detection
+confint(backTransform(m0_23, type = "state")) #Occupancy
+
+#Detection only models
+det_models_23 <- list(
+  null = occu(~1 ~1, data = umf_23),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_23),
+  d_water = occu(~Water_Bin ~1, data = umf_23),
+  d_water_trail = occu(~Water_Bin + Distance_to_Trail_m ~1, data = umf_23)
+  ) #List of models for 2023
+
+aictab(cand.set = det_models_23) #Ranks models via aicc
+
+#Adding fixed habitat covariates with null occupancy.
+occu_models_23 <- list(
+  o_null = occu(~1 ~1, data = umf_23),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_23),
+  o_water = occu(~1 ~Water_Bin, data = umf_23),
+  o_water_trail = occu(~1 ~Distance_to_Trail_m + Water_Bin, data = umf_23)
+  ) #List of models for 2023
+
+aictab(cand.set = occu_models_23) #Ranks models via aicc
+```
+
+### 2022
+
+```{r}
+#Filtering out only dates in 2022
+detection22 <- detection %>% 
+  filter(Year == 2022)
+
+nrow(detection22) #should be 754 rows and there are 29 grids so 2022 has 26 sampling days
+
+n_detection22 <- detection22 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix22 <- n_detection22 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2022
+habitat_22 <- habitat %>% 
+  filter(Year == 2022)
+
+#Null model
+umf_22 <- unmarkedFrameOccu(
+  y = det_matrix22,
+  siteCovs = habitat_22
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_22) #checking
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_22 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_22)
+
+summary(m0_22) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_22, type = "det")    #Detection
+backTransform(m0_22, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_22, type = "det")) #Detection
+confint(backTransform(m0_22, type = "state")) #Occupancy
+
+#Detection only models
+det_models_22 <- list(
+  null = occu(~1 ~1, data = umf_22),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_22),
+  d_water = occu(~Water_Bin ~1, data = umf_22),
+  d_water_trail_tree = occu(~Water_Bin+Distance_to_Trail_m+Trees ~1, data = umf_22),
+  d_tree = occu(~Trees ~1, data = umf_22)
+  ) #List of models for 2022
+
+aictab(cand.set = det_models_22) #Ranks models via aicc
+
+#Adding fixed habitat covariates with null occupancy.
+occu_models_22 <- list(
+  o_null = occu(~1 ~1, data = umf_22),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_22),
+  o_water = occu(~1 ~Water_Bin, data = umf_22),
+  o_tree = occu(~1 ~Trees, data = umf_22),
+  o_water_trail_tree = occu(~1 ~Distance_to_Trail_m + Water_Bin + Trees, data = umf_22)
+  ) #List of models for 2022
+
+aictab(cand.set = occu_models_22) #Ranks models via aicc
+
+#Adding fixed habitat covariates with best fit model: binned distance from water
+models_22 <- list(
+  null = occu(~1 ~1, data = umf_22),
+  trail = occu(~Water_Bin ~Distance_to_Trail_m, data = umf_22),
+  water = occu(~Water_Bin ~Water_Bin, data = umf_22),
+  tree = occu(~Water_Bin ~Trees, data = umf_22),
+  water_trail_tree = occu(~Water_Bin ~Distance_to_Trail_m + Water_Bin + Trees, data = umf_22)
+  ) #List of models for 2022
+
+aictab(cand.set = models_22) #Ranks models via aicc
+
+tree = occu(~Water_Bin ~Trees, data = umf_22)
+tree
+```
+
+```{r}
+#best fit model for 2022
+best_22 = occu(~Water_Bin ~Trees, data = umf_22)
+
+best_22 <- predict(best_22, type = "state")  #Occupancy
+
+#Add grid as a column
+best_22$Grid <- habitat_22$Grid
+```
+
+### 2021
+
+```{r}
+#Filtering out only dates in 2021
+detection21 <- detection %>% 
+  filter(Year == 2021)
+
+nrow(detection21) #should be 551 rows and there are 29 grids so 2021 has 19 sampling days
+
+n_detection21 <- detection21 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix21 <- n_detection21 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2021
+habitat_21 <- habitat %>% 
+  filter(Year == 2021)
+
+#Null model
+umf_21 <- unmarkedFrameOccu(
+  y = det_matrix21,
+  siteCovs = habitat_21
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_21) #checking
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_21 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_21)
+
+summary(m0_21) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_21, type = "det")    #Detection
+backTransform(m0_21, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_21, type = "det")) #Detection
+confint(backTransform(m0_21, type = "state")) #Occupancy
+
+#Detection only models
+det_models_21 <- list(
+  null = occu(~1 ~1, data = umf_21),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_21),
+  d_water = occu(~Water_Bin ~1, data = umf_21),
+  d_water_trail = occu(~Water_Bin+Distance_to_Trail_m ~1, data = umf_21)
+  ) #List of models for 2021
+
+aictab(cand.set = det_models_21) #Ranks models via aicc
+
+#Adding fixed habitat covariates with null occupancy.
+occu_models_21 <- list(
+  o_null = occu(~1 ~1, data = umf_21),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_21),
+  o_water = occu(~1 ~Water_Bin, data = umf_21),
+  o_water_trail = occu(~1 ~Distance_to_Trail_m + Water_Bin, data = umf_21)
+  ) #List of models for 2021
+
+aictab(cand.set = occu_models_21) #Ranks models via aicc
+
+#Adding fixed habitat covariates with best fit model: binned distance from water
+models_21 <- list(
+  null = occu(~1 ~1, data = umf_21),
+  trail = occu(~Water_Bin ~Distance_to_Trail_m, data = umf_21),
+  water = occu(~Water_Bin ~Water_Bin, data = umf_21),
+  water_trail = occu(~Water_Bin ~Distance_to_Trail_m + Water_Bin, data = umf_21)
+  ) #List of models for 2021
+
+aictab(cand.set = models_21) #Ranks models via aicc
+
+trail = occu(~Water_Bin ~Distance_to_Trail_m, data = umf_21)
+trail
+```
+
+```{r}
+#best fit model for 2021
+best_21 = occu(~Water_Bin ~Distance_to_Trail_m, data = umf_21)
+
+best_21 <- predict(best_21, type = "state")  #Occupancy
+
+#Add grid as a column
+best_21$Grid <- habitat_21$Grid
+```
+
+### 2020
+
+```{r}
+#Filtering out only dates in 2020
+detection20 <- detection %>% 
+  filter(Year == 2020)
+
+nrow(detection20) #should be 899 rows and there are 29 grids so 2020 has 31 sampling days
+
+n_detection20 <- detection20 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix20 <- n_detection20 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2020
+habitat_20 <- habitat %>% 
+  filter(Year == 2020)
+
+#Null model
+umf_20 <- unmarkedFrameOccu(
+  y = det_matrix20,
+  siteCovs = habitat_20
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_20) #checking
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_20 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_20)
+
+summary(m0_20) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_20, type = "det")    #Detection
+backTransform(m0_20, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_20, type = "det")) #Detection
+confint(backTransform(m0_20, type = "state")) #Occupancy
+
+#Detection only models
+det_models_20 <- list(
+  null = occu(~1 ~1, data = umf_20),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_20),
+  d_water = occu(~Water_Bin ~1, data = umf_20),
+  d_water_trail = occu(~Water_Bin+Distance_to_Trail_m ~1, data = umf_20)
+  ) #List of models for 2020
+
+aictab(cand.set = det_models_20) #Ranks models via aicc
+
+#Adding fixed habitat covariates with null occupancy.
+occu_models_20 <- list(
+  o_null = occu(~1 ~1, data = umf_20),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_20),
+  o_water = occu(~1 ~Water_Bin, data = umf_20),
+  o_water_trail = occu(~1 ~Distance_to_Trail_m + Water_Bin, data = umf_20)
+  ) #List of models for 2020
+
+aictab(cand.set = occu_models_20) #Ranks models via aicc
+
+#Adding fixed habitat covariates with best fit model: binned distance from trail
+models_20 <- list(
+  null = occu(~1 ~1, data = umf_20),
+  trail = occu(~Distance_to_Trail_m ~Distance_to_Trail_m, data = umf_20),
+  water = occu(~Distance_to_Trail_m ~Water_Bin, data = umf_20),
+  water_trail = occu(~Distance_to_Trail_m ~Distance_to_Trail_m + Water_Bin, data = umf_20)
+  ) #List of models for 2020
+
+aictab(cand.set = models_20) #Ranks models via aicc
+```
+
+### 2019
+
+```{r}
+#Filtering out only dates in 2019
+detection19 <- detection %>% 
+  filter(Year == 2019)
+
+nrow(detection19) #should be 841 rows and there are 29 grids so 2019 has 29 sampling days
+
+n_detection19 <- detection19 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix19 <- n_detection19 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2019
+habitat_19 <- habitat %>% 
+  filter(Year == 2019)
+
+#Null model
+umf_19 <- unmarkedFrameOccu(
+  y = det_matrix19,
+  siteCovs = habitat_19
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_19) #checking
+
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_19 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_19)
+
+summary(m0_19) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_19, type = "det")    #Detection
+backTransform(m0_19, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_19, type = "det")) #Detection
+confint(backTransform(m0_19, type = "state")) #Occupancy
+
+#Testing fixed habitat covariates with detection
+det_models_19 <- list(
+  null = occu(~1 ~1, data = umf_19),
+  d_veg = occu(~Max_Veg_Height_cm ~1, data = umf_19),
+  d_tree = occu(~Trees ~1, data = umf_19),
+  d_hab = occu(~Habitat_Type ~1, data = umf_19),
+  d_litter = occu(~Litter_Depth_cm ~1, data = umf_19),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_19),
+  d_water = occu(~Water_Bin ~1, data = umf_19)
+)
+
+aictab(cand.set = det_models_19) #Ranks models via aicc
+
+#Testing fixed habitat covariates with occupancy.
+occu_models_19 <- list(
+  null = occu(~1 ~1, data = umf_19),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_19),
+  o_water = occu(~1 ~Water_Bin, data = umf_19),
+  o_habitat = occu(~1 ~Habitat_Type, data = umf_19),
+  o_litter = occu(~1 ~Litter_Depth_cm, data = umf_19),
+  o_veg = occu(~1 ~Max_Veg_Height_cm, data = umf_19),
+  o_tree = occu(~1 ~Trees, data = umf_19)
+  ) #List of models for 2019
+
+aictab(cand.set = occu_models_19) #Ranks models via aicc
+
+#Adding fixed habitat covariates with occupancy with best fit detection model: Distance to Trail
+models_19 <- list(
+  null = occu(~1 ~1, data = umf_19),
+  trail = occu(~Distance_to_Trail_m ~Distance_to_Trail_m, data = umf_19),
+  water = occu(~Distance_to_Trail_m ~Water_Bin, data = umf_19),
+  habitat = occu(~Distance_to_Trail_m ~Habitat_Type, data = umf_19),
+  litter = occu(~Distance_to_Trail_m ~Litter_Depth_cm, data = umf_19),
+  veg = occu(~Distance_to_Trail_m ~Max_Veg_Height_cm, data = umf_19),
+  tree = occu(~Distance_to_Trail_m ~Trees, data = umf_19)
+  ) #List of models for 2019
+
+aictab(cand.set = models_19) #Ranks models via aicc
+```
+
+### 2018
+
+```{r}
+#Filtering out only dates in 2018
+detection18 <- detection %>% 
+  filter(Year == 2018)
+
+nrow(detection18) #should be 899 rows and there are 29 grids so 2018 has 31 sampling days
+
+n_detection18 <- detection18 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix18 <- n_detection18 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2018
+habitat_18 <- habitat %>% 
+  filter(Year == 2018)
+
+#Null model
+umf_18 <- unmarkedFrameOccu(
+  y = det_matrix18,
+  siteCovs = habitat_18
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_18) #checking
+
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_18 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_18)
+
+summary(m0_18) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_18, type = "det")    #Detection
+backTransform(m0_18, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_18, type = "det")) #Detection
+confint(backTransform(m0_18, type = "state")) #Occupancy
+
+#Testing fixed habitat covariates with detection
+det_models_18 <- list(
+  null = occu(~1 ~1, data = umf_18),
+  d_veg = occu(~Max_Veg_Height_cm ~1, data = umf_18),
+  d_tree = occu(~Trees ~1, data = umf_18),
+  d_hab = occu(~Habitat_Type ~1, data = umf_18),
+  d_litter = occu(~Litter_Depth_cm ~1, data = umf_18),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_18),
+  d_water = occu(~Water_Bin ~1, data = umf_18)
+)
+
+aictab(cand.set = det_models_18) #Ranks models via aicc
+
+#Testing fixed habitat covariates with occupancy.
+occu_models_18 <- list(
+  null = occu(~1 ~1, data = umf_18),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_18),
+  o_water = occu(~1 ~Water_Bin, data = umf_18),
+  o_habitat = occu(~1 ~Habitat_Type, data = umf_18),
+  o_litter = occu(~1 ~Litter_Depth_cm, data = umf_18),
+  o_veg = occu(~1 ~Max_Veg_Height_cm, data = umf_18),
+  o_tree = occu(~1 ~Trees, data = umf_18)
+  ) #List of models for 2018
+
+aictab(cand.set = occu_models_18) #Ranks models via aicc
+
+#Adding fixed habitat covariates with occupancy with second best fit detection model: Litter Depth
+models_18 <- list(
+  null = occu(~1 ~1, data = umf_18),
+  trail = occu(~Litter_Depth_cm ~Distance_to_Trail_m, data = umf_18),
+  water = occu(~Litter_Depth_cm ~Water_Bin, data = umf_18),
+  habitat = occu(~Litter_Depth_cm ~Habitat_Type, data = umf_18),
+  litter = occu(~Litter_Depth_cm ~Litter_Depth_cm, data = umf_18),
+  veg = occu(~Litter_Depth_cm ~Max_Veg_Height_cm, data = umf_18),
+  tree = occu(~Litter_Depth_cm ~Trees, data = umf_18)
+  ) #List of models for 2018
+
+aictab(cand.set = models_18) #Ranks models via aicc
+```
+
+### 2017
+
+```{r}
+#Filtering out only dates in 2017
+detection17 <- detection %>% 
+  filter(Year == 2017)
+
+nrow(detection17) #should be 812 rows and there are 29 grids so 2017 has 28 sampling days
+
+n_detection17 <- detection17 %>%
+  select(Grid, Full_Date, Detection)
+
+#Generates matrix from detection data where rows are grids and columns are dates
+det_matrix17 <- n_detection17 %>%
+  pivot_wider(
+    names_from  = Full_Date,
+    values_from = Detection
+  ) %>%
+  column_to_rownames("Grid") %>% #this is prefered structure for 'unmarked'
+  as.matrix()
+
+#Filtering out 2017
+habitat_17 <- habitat %>% 
+  filter(Year == 2017)
+
+#Null model
+umf_17 <- unmarkedFrameOccu(
+  y = det_matrix17,
+  siteCovs = habitat_17
+) #converting to unmarked frame to use package 'unmarked'
+
+summary(umf_17) #checking
+
+#Running null occupancy model - assumes that detection and occupancy are the same across grids
+m0_17 <- occu(formula = ~1 # detection formula first
+                        ~1, # occupancy formula second, 
+                  data = umf_17)
+
+summary(m0_17) #Show AIC, and estimates, SE, z-scores (on logit scale)
+
+#Changing from logit scale to probability using ψ=1/1+e^-(Logit value)
+backTransform(m0_17, type = "det")    #Detection
+backTransform(m0_17, type = "state")  #Occupancy
+
+#Confidence intervals on probability scale
+confint(backTransform(m0_17, type = "det")) #Detection
+confint(backTransform(m0_17, type = "state")) #Occupancy
+
+#Detection only models
+det_models_17 <- list(
+  null = occu(~1 ~1, data = umf_17),
+  d_trail = occu(~Distance_to_Trail_m ~1, data = umf_17),
+  d_water = occu(~Water_Bin ~1, data = umf_17),
+  d_water_trail = occu(~Water_Bin+Distance_to_Trail_m ~1, data = umf_17)
+  ) #List of models for 2017
+
+aictab(cand.set = det_models_17) #Ranks models via aicc
+
+#Adding fixed habitat covariates with null occupancy.
+occu_models_17 <- list(
+  o_null = occu(~1 ~1, data = umf_17),
+  o_trail = occu(~1 ~Distance_to_Trail_m, data = umf_17),
+  o_water = occu(~1 ~Water_Bin, data = umf_17),
+  o_water_trail = occu(~1 ~Distance_to_Trail_m + Water_Bin, data = umf_17)
+  ) #List of models for 2017
+
+aictab(cand.set = occu_models_17) #Ranks models via aicc
+```
+
+### Naive Occupancy
+
+```{r}
+#Uses umf to find the exact proportion of sites with at least detection each year - naive occupancy
+mean(rowSums(umf_25@y) > 0)
+mean(rowSums(umf_24@y) > 0)
+mean(rowSums(umf_23@y) > 0)
+mean(rowSums(umf_22@y) > 0)
+mean(rowSums(umf_21@y) > 0)
+mean(rowSums(umf_20@y) > 0)
+mean(rowSums(umf_19@y) > 0)
+mean(rowSums(umf_18@y) > 0)
+mean(rowSums(umf_17@y) > 0)
+```
+
+## Graphing Single Season Occupancy
+
+### Null Occupancy Line Plot
+
+```{r}
+#Using this dataset
+null_results <- read.csv("Data_Tables/Occupancy_Results.csv") #table of manually entered null occupancy and detection results from single-season analysis with naive ocupancy
+
+
+#Line Plots
+Plot_occu_line <- ggplot(null_results, aes(x = Year, y = Estimate, color = Parameter, fill = Parameter)) +
+  geom_ribbon(data = null_results,
+              aes(ymin = Lower, ymax = Upper),
+              alpha = 0.2, color = NA, show.legend = FALSE) +
+  geom_line(linewidth = 1.6) +
+  geom_point(size = 5, show.legend = FALSE) + 
+  scale_color_manual(
+  values = c("Detection" = "darkseagreen", "Naive_Occu" = "lightblue", "Pred_Occu" = "steelblue"),
+  labels = c("Detection", "Naive Occupancy", "Predicted Occupancy")
+) +
+  scale_fill_manual(
+    values = c("Pred_Occu" = "steelblue", "Detection" = "darkseagreen")
+  ) +
+  labs(x = "Year", y = "Probability", color = "Parameter", fill = "") +
+  annotate(
+  "text",
+  x = min(null_results$Year),
+  y = max(null_results$Estimate, na.rm = TRUE),
+  label = "*",
+  color = "red",
+  size = 11,
+  hjust = 0.5,
+  vjust = 2.0
+) +
+  scale_y_continuous(limits = c(0, NA)) +
+  scale_x_continuous(breaks = sort(unique(null_results$Year))) +
+  theme_minimal(base_family = "serif") +
+  theme(
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 18),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+
+ggsave("Plot_occu_Line.png", plot = Plot_occu_line, width = 10, height = 6, units = "in", dpi = 800)
+
+Plot_occu_line
+```
+
+### Map of Gridpoint Occupancy with Best Fit Models
+
+```{r}
+library(sf)
+
+
+#Defines lat/long boundaries for land_lab to use for map
+land_lab <- st_bbox(c(
+  xmin = -82.54700, #Long
+  xmax = -82.54000,
+  ymin = 40.08750, #Lat
+  ymax = 40.09180
+), crs = st_crs(4326))
+
+#converting to 'simple feature' object
+land_lab_sf <- st_as_sfc(land_lab)
+land_lab_sf <- st_as_sf(land_lab_sf)
+
+#importing a kmf file from manual Google Earth polygons/line drawings
+ponds_paths <- st_read("Land Lab.kml")
+
+#testing plot
+plot(st_geometry(land_lab_sf), col = NA, border = "black") #land lab box
+plot(st_geometry(ponds_paths), add = TRUE, col = "blue") #paths and ponds on top
+
+
+#convert sites table to be readable by 'sf' library
+site_sf <- st_as_sf(
+  site,
+  coords = c("Long", "Lat"),  #long 1st lat 2nd
+  crs = 4326,
+  remove = FALSE
+)
+
+#adding to land lab with gridpoints
+site_map <- ggplot() +
+  geom_sf(data = land_lab_sf, fill = NA, color = "black") +
+  geom_sf(data = ponds_paths, fill = "blue", color = "darkblue") +
+  geom_sf(data = site_sf, color = "red", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+site_map
+
+ponds_paths <- st_transform(ponds_paths, st_crs(land_lab_sf))
+site_sf   <- st_transform(site_sf, st_crs(land_lab_sf))
+
+#adding to graph
+plot(st_geometry(land_lab_sf), col = NA, border = "black", main = "Land Lab with Ponds and Sites")
+plot(st_geometry(ponds_paths), add = TRUE, col = "lightblue")
+plot(st_geometry(site_sf), add = TRUE, col = "red", pch = 19)
+
+#base plot with lat/long and labeled gridpoints
+ggplot() +
+  geom_sf(data = land_lab_sf, fill = NA, color = "black") +
+  geom_sf(data = ponds_paths, fill = "lightblue", color = "darkblue") +
+  geom_sf(data = site_sf, color = "red", size = 3) +
+  geom_text(data = site, aes(x = Long, y = Lat, label = Grid), nudge_y = 0.0003) +
+  coord_sf(xlim = c(land_lab["xmin"], land_lab["xmax"]), ylim = c(land_lab["ymin"], land_lab["ymax"])) +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Map for best fit model in 2024
+
+```{r}
+#using this dataset containing predicted values for best model in 2024
+best_24
+
+#combining tables
+grid_occu24 <- best_24 %>%
+  left_join(site, by = "Grid")
+
+#map
+ggplot() +
+  geom_sf(data = land_lab_sf, fill = NA, color = "black") +
+  geom_sf(data = ponds_paths, fill = "lightblue", color = "darkblue") +
+  # Points colored by Predicted occupancy
+  geom_point(
+    data = grid_occu24, 
+    aes(x = Long, y = Lat, color = Predicted), 
+    size = 5
+  ) +
+  geom_text(
+    data = grid_occu24, 
+    aes(x = Long, y = Lat, label = Grid), 
+    nudge_y = 0.0003) +
+  scale_color_gradient2(
+    low = "blue", 
+    mid = "white", 
+    high = "red",  
+    midpoint = 0.90) +
+  coord_sf(
+    xlim = c(land_lab["xmin"], land_lab["xmax"]), 
+    ylim = c(land_lab["ymin"], land_lab["ymax"])
+  ) +
+  theme_minimal(base_family = "serif") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(color = "Predicted Occupancy")  # label for the gradient legend
+```
+
+### Map for best fit model in 2022
+
+```{r}
+#using this dataset containing predicted values for best model in 2024
+best_22
+
+#combining tables
+grid_occu22 <- best_22 %>%
+  left_join(site, by = "Grid")
+
+#map
+ggplot() +
+  geom_sf(data = land_lab_sf, fill = NA, color = "black") +
+  geom_sf(data = ponds_paths, fill = "lightblue", color = "darkblue") +
+  # Points colored by Predicted occupancy
+  geom_point(
+    data = grid_occu22, 
+    aes(x = Long, y = Lat, color = Predicted), 
+    size = 5
+  ) +
+  geom_text(
+    data = grid_occu22, 
+    aes(x = Long, y = Lat, label = Grid), 
+    nudge_y = 0.0003) +
+  scale_color_gradient2(
+    low = "blue", 
+    mid = "white", 
+    high = "red",  
+    midpoint = 0.8) +
+  coord_sf(
+    xlim = c(land_lab["xmin"], land_lab["xmax"]), 
+    ylim = c(land_lab["ymin"], land_lab["ymax"])
+  ) +
+  theme_minimal(base_family = "serif") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(color = "Predicted Occupancy")  # label for the gradient legend
+```
+
+### Map for best fit model in 2021
+
+```{r}
+#using this dataset containing predicted values for best model in 2021
+best_21
+
+#combining tables
+grid_occu21 <- best_21 %>%
+  left_join(site, by = "Grid")
+
+#map
+ggplot() +
+  geom_sf(data = land_lab_sf, fill = NA, color = "black") +
+  geom_sf(data = ponds_paths, fill = "lightblue", color = "darkblue") +
+  # Points colored by Predicted occupancy
+  geom_point(
+    data = grid_occu21, 
+    aes(x = Long, y = Lat, color = Predicted), 
+    size = 5
+  ) +
+  geom_text(
+    data = grid_occu21, 
+    aes(x = Long, y = Lat, label = Grid), 
+    nudge_y = 0.0003) +
+  scale_color_gradient2(
+    low = "blue", 
+    mid = "white", 
+    high = "red",  
+    midpoint = 0.5) +
+  coord_sf(
+    xlim = c(land_lab["xmin"], land_lab["xmax"]), 
+    ylim = c(land_lab["ymin"], land_lab["ymax"])
+  ) +
+  theme_minimal(base_family = "serif") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(color = "Predicted Occupancy")  # label for the gradient legend
+```
+
+## Multi-Season Occupancy
+
+Dynamic occupancy analysis from 2017-2025.
+
+Includes colonization probability (𝛾𝑖), extinction probability (𝜖𝑖) in addition to detection probability (𝑝𝑖) and initial occupancy (Ψ𝑖),
+
+```{r}
+
+m_date <- date %>% 
+  subset(select = c(Year, Month_Year, Month)) %>% 
+  distinct(Month_Year, .keep_all = TRUE) #keeping only distinct month_years without dates
+
+hab_cov <- habitat %>% 
+  subset(select = c(Grid, Distance_to_Trail_m, Water_Bin)) %>% 
+  distinct(Grid, .keep_all = TRUE) #subsets only the site covariates that are consistent across years
+yearly_hab_cov <- habitat %>% 
+  subset(select = -c(Distance_to_Trail_m, Water_Bin)) #subsets only the site covariates that change from year to year
+
+m_weather <- weather %>%
+  mutate(Month = substr(Date, 6, 7), Year  = substr(Date, 1, 4), Month_Year = paste(Month, Year, sep = "-")
+  ) #Turning date into Month-Year format
+
+m_weather$Month <- month(mdy(m_weather$Month_Year))
+
+m_weather <- m_weather %>%
+  filter(as.integer(substr(Date, 6, 7)) %in% 4:10) #keeping only weather data from april to october
+
+#Taking out 2016 and months outside of 4-10
+detection <- detection %>%
+  filter(Year != 2016) %>%
+  filter(Month >= 4, Month <= 10)
+
+#condensing all month-days by gridpoint
+m_detection <- detection  %>%
+  group_by(Grid, Month_Year) %>%
+  summarise(Detection = max(Detection), .groups = "drop") #choose highest number to keep (so keep 1 for any months with at least one day labeled 1)
+```
+
+### Matrix Generation
+
+Generating lots of matrices since all inputs are matrices instead of table columns.
+
+Detection
+
+```{r}
+#combining the site cov and detection
+m_detection_hab <- left_join(m_detection, hab_cov, by = "Grid")
+
+#Turning into detection matrix
+m_det_matrix <- m_detection_hab %>%
+  pivot_wider(
+    names_from  = Month_Year,
+    values_from = Detection
+  ) %>%
+  as.matrix()
+
+dim(m_det_matrix) #checking column numbers
+
+#For det matrix - ordering the detection date columns chronologically - using lubridate
+ordered_dates <- colnames(m_det_matrix[, 4:66]) #getting only the detection columns 
+ordered_dates <- order(ordered_dates) #ordering the dates
+ord_det_matrix <- m_det_matrix[, c(1:3, 3 + ordered_dates)]  #keep first 3 columns and reorder
+```
+
+Primary & Secondary Periods
+
+```{r}
+#sampling month and year matrix
+
+m_month_grid <- crossing(
+  Grid = site$Grid, m_date) #assigning all the grids to each month
+
+m_month_grid %>%
+  count(Grid) #sanity check
+
+
+setDT(m_month_grid) #making into a usable format for library data.table
+
+m_month_matrix <- m_month_grid %>% 
+  dcast(Grid ~ Month_Year,
+        value.var = "Month") #matrix-like table of grid by date filled with months
+m_month_matrix <- as.matrix(m_month_matrix) #changing into proper matrix to reorder
+ord_month_matrix <- m_month_matrix[, c(1, 1 + ordered_dates)]  #keep first column and reordering the dates for month matrix 
+
+colnames(ord_month_matrix)[-1] <- paste0("secondary", seq_along(colnames(ord_month_matrix)[-1])) #changing column names after grid to "secondary#"
+
+m_year_matrix <- m_month_grid %>% 
+  dcast(Grid ~ Month_Year,
+        value.var = "Year") #matrix-like table of grid by date filled with years
+m_year_matrix <- as.matrix(m_year_matrix) #changing into proper matrix to reorder
+ord_year_matrix <- m_year_matrix[, c(1, 1 + ordered_dates)]  #keep first 3 columns and reordering the dates for year matrix 
+colnames(ord_year_matrix)[-1] <- paste0("primary", seq_along(colnames(ord_year_matrix)[-1])) #changing column names after grid to "primary#"
+
+#converting back to df to use leftjoin
+m_det_df <- as.data.frame(ord_det_matrix)
+m_month_df <- as.data.frame(ord_month_matrix)
+m_year_df <- as.data.frame(ord_year_matrix)
+
+#combining all 3 (detection with site cov + month + year)
+m_full_df <- m_det_df %>% 
+  left_join(m_month_df, by = "Grid") %>% 
+  left_join(m_year_df, by = "Grid")
+
+dim(m_full_df) #sanity check: should have 29 columns (grid) and 66+63+63= 192 rows
+##This is so I can have fewer datasets that can be started with in the final version of code instead of doing all the dataset manipulation before this
+```
+
+### Separating out Detection & Periods
+
+A lot of following code is based off https://darinjmcneil.weebly.com/multi-season-occupancy.html and https://jamesepaterson.github.io/jamespatersonblog/2021-01-01_dynamicoccupancy.html). Secondary period included in observation covariate later.
+
+```{r}
+#checking rows using index to know where to group
+index_full_df <- data.frame(Index = 1:ncol(m_full_df), Name = colnames(m_full_df))
+
+rownames(m_full_df) <- m_full_df$Grid #making grid the rows
+
+detection_matrix <- as.matrix(m_full_df[, 4:66]) #matrix of detection
+
+sec_matrix <- as.matrix(m_full_df[, 67:129]) #matrix of secondary period
+
+prim_matrix <- as.matrix(m_full_df[, 130:192]) #matrix of primary period
+
+#sanity checks: all should be the same
+dim(detection_matrix) 
+dim(sec_matrix)
+dim(prim_matrix)
+```
+
+### fixed siteCovs
+
+Habitat covariates that are consistent across years
+
+```{r}
+#inserting directly into unmarked frame instead of making matrices because it was causing issues
+
+#trail_matrix <- as.matrix(m_full_df[, 2, drop = FALSE]) #not using
+
+#water_matrix <- as.matrix(m_full_df[, 3, drop = FALSE]) #not using
+  
+
+```
+
+::: callout-note
+Not including yearly site covariates in multi-season analysis since only 3 years were measured, and I ran into some errors. 3 primary periods (years) with 7 secondary periods in each (months) might not be enough.
+:::
+
+### obsCovs matrices
+
+Additional observation covariates that could change by survey by site. In this case, will remain consistent for all the coverboards in each month and the weather data from Newark airport is nearest airport with enough consistent historical data.
+
+```{r}
+#prepping weather data
+
+n_weather <- m_weather %>% 
+  select(Month_Year, PRCP, TAVG, TMIN, TMAX, DT32, DX70) #selecting weather variables to use
+
+n_weather <- n_weather %>% 
+  left_join(m_month_grid, by = "Month_Year") #adding grid to weather data
+
+#average precipitation matrix by secondary period
+avgprecip_matrix <- n_weather %>% 
+  pivot_wider(
+    id_cols = Grid,          
+    names_from = Month_Year,         
+    values_from = PRCP) %>% 
+  column_to_rownames("Grid") %>% 
+  as.matrix()
+
+#average temp matrix by secondary period
+avgtemp_matrix <- n_weather %>% 
+  pivot_wider(
+    id_cols = Grid,          
+    names_from = Month_Year,         
+    values_from = TAVG) %>% 
+  column_to_rownames("Grid") %>% 
+  as.matrix()
+
+#min temp matrix by secondary period
+mintemp_matrix <- n_weather %>% 
+  pivot_wider(
+    id_cols = Grid,          
+    names_from = Month_Year,         
+    values_from = TMIN) %>% 
+  column_to_rownames("Grid") %>% 
+  as.matrix()
+
+#max temp matrix by secondary period
+maxtemp_matrix <- n_weather %>% 
+  pivot_wider(
+    id_cols = Grid,          
+    names_from = Month_Year,         
+    values_from = TMAX) %>% 
+  column_to_rownames("Grid") %>% 
+  as.matrix()
+
+#min temp under 0 C matrix by secondary period
+mintemp0_matrix <- n_weather %>% 
+  pivot_wider(
+    id_cols = Grid,          
+    names_from = Month_Year,         
+    values_from = DT32) %>% 
+  column_to_rownames("Grid") %>% 
+  as.matrix()
+
+#max temp over 21.1 C matrix by secondary period
+maxtemp21.1_matrix <- n_weather %>% 
+  pivot_wider(
+    id_cols = Grid,          
+    names_from = Month_Year,         
+    values_from = DX70) %>% 
+  column_to_rownames("Grid") %>% 
+  as.matrix()
+
+#sanity checks - should be all the same
+dim(avgprecip_matrix)
+dim(avgtemp_matrix)
+dim(mintemp_matrix)
+dim(maxtemp_matrix)
+dim(mintemp0_matrix)
+dim(maxtemp21.1_matrix)
+```
+
+::: callout-note
+List of all matrix:
+
+detection_matrix (presences/absences)
+
+sec_matrix, prim_matrix (secondary and primary period)
+
+trail_matrix, water_matrix (siteCovs)
+
+avgprecip_matrix, mintemp_matrix, maxtemp_matrix，mintemp0_matrix, maxtemp21.1_matrix (obsCovs)
+:::
+
+```{r}
+#making unmarkedframe for occupancy analysis (including all matrices from above)
+umf_multi <- unmarkedMultFrame(
+  y = detection_matrix,
+  obsCovs = list(
+    sec = sec_matrix,
+    avgPrecip = avgprecip_matrix,
+    minTemp = mintemp_matrix,
+    maxTemp = maxtemp_matrix,
+    minTemp0 = as.matrix(mintemp0_matrix),
+    maxTemp21.1 = as.matrix(maxtemp21.1_matrix)),
+  numPrimary = 9) #9 is number of years
+
+siteCovs(umf_multi) <- data.frame(
+  trail = as.numeric(m_full_df[, 2]),
+  water = as.factor(m_full_df[, 3])
+)
+
+
+#checking
+str(siteCovs(umf_multi))
+str(obsCovs(umf_multi))
+```
+
+### Running Multi-Season
+
+```{r}
+# knitr::opts_chunk$set(error = TRUE)
+# #Building detection models
+# 
+# p.null <- colext(psiformula = ~1, #initial occupancy
+#                  gammaformula = ~ 1, #colonization
+#                  epsilonformula = ~ 1, #extinction
+#                  pformula = ~ 1, #detection
+#                  data = umf_multi,
+#                  method="BFGS")
+# 
+# p.sec <- colext(psiformula= ~ 1,
+#                  gammaformula = ~ 1,
+#                  epsilonformula = ~ 1,
+#                  pformula = ~ sec,
+#                  data = umf_multi,
+#                  method="BFGS")
+# 
+# p.avgPrecip <- colext(psiformula= ~ 1,
+#                  gammaformula = ~ 1,
+#                  epsilonformula = ~ 1,
+#                  pformula = ~ avgPrecip,
+#                  data = umf_multi,
+#                  method="BFGS")
+# 
+# p.minTemp <- colext(psiformula= ~ 1,
+#                  gammaformula = ~ 1,
+#                  epsilonformula = ~ 1,
+#                  pformula = ~ minTemp,
+#                  data = umf_multi,
+#                  method="BFGS")
+# 
+# p.maxTemp <- colext(psiformula= ~ 1,
+#                  gammaformula = ~ 1,
+#                  epsilonformula = ~ 1,
+#                  pformula = ~ maxTemp,
+#                  data = umf_multi,
+#                  method="BFGS")
+# 
+# p.min0 <- colext(psiformula= ~ 1,
+#                  gammaformula = ~ 1,
+#                  epsilonformula = ~ 1,
+#                  pformula = ~ minTemp0,
+#                  data = umf_multi,
+#                  method="BFGS")
+# 
+# p.max21.1 <- colext(psiformula= ~ 1,
+#                  gammaformula = ~ 1,
+#                  epsilonformula = ~ 1,
+#                  pformula = ~ maxTemp21.1,
+#                  data = umf_multi,
+#                  method="BFGS")
+# 
+# p.full <- colext(psiformula= ~ 1,
+#                  gammaformula = ~ 1,
+#                  epsilonformula = ~ 1,
+#                  pformula = ~ avgPrecip + minTemp + maxTemp + minTemp0 + maxTemp21.1,
+#                  data = umf_multi,
+#                  method="BFGS")
+# 
+# #ranking by AICc
+# multi_list1 <- list(p.trail=p.trail,
+#                p.water=p.water,
+#                p.avgPrecip=p.avgPrecip,
+#                p.minTemp=p.minTemp,
+#                p.maxTemp=p.maxTemp,
+#                p.min0=p.min0,
+#                p.max21.1=p.max21.1,
+#                p.null=p.null,
+#                p.full=p.full
+#                )
+# aictab(multi_list1)
+# 
+# str(obsCovs(umf1))
+
+```
+
+These ran without an error but it prevented the html file from rendering. Possibly something on the back end.
+
+```{r}
+# knitr::opts_chunk$set(error = TRUE)
+# #adding best fit model (mintemp)
+# #Building models
+# 
+# mm_null <- colext(psiformula = ~1, #initial occupancy
+#                  gammaformula = ~ 1, #colonization
+#                  epsilonformula = ~ 1, #extinction
+#                  pformula = ~ 1, #detection
+#                  data = umf1, 
+#                  method="BFGS")
+# 
+# mm_trail <- colext(psiformula= ~ trail, 
+#                  gammaformula = ~ 1, 
+#                  epsilonformula = ~ 1, 
+#                  pformula = ~ minTemp, 
+#                  data = umf1, 
+#                  method="BFGS")
+# 
+# mm_water <- colext(psiformula= ~ water, 
+#                 gammaformula = ~ 1, 
+#                 epsilonformula = ~ 1, 
+#                 pformula = ~ minTemp, 
+#                 data = umf1, 
+#                 method="BFGS")
+# 
+# mm_trail_water <- colext(psiformula= ~ trail+water, 
+#                 gammaformula = ~ 1, 
+#                 epsilonformula = ~ 1, 
+#                 pformula = ~ minTemp, 
+#                 data = umf1, 
+#                 method="BFGS")
+# 
+# multi_list2 <- list(mm_null=mm_null,
+#                mm_trail=mm_trail,
+#                mm_water=mm_water,
+#                mm_trail_water=mm_trail_water
+#                )
+# aictab(multi_list2)
+#
+#model with highest aicc ranking
+#backTransform(mm_trail, type = "col") #colonization
+#backTransform(mm_trail, type = "ext") #extinction
+
+write.csv(best_21, "Qiu_GS2021_Occupancy_By_Grid.csv", row.names = FALSE)
+write.csv(best_22, "Qiu_GS2022_Occupancy_By_Grid.csv", row.names = FALSE)
+write.csv(best_24, "Qiu_GS2024_Occupancy_By_Grid.csv", row.names = FALSE)
+```
+
+::: callout-note
+I decided not to use much of the multi-season results because it gave a lot of NaN as well so it would be difficult to say anything meaningful. The html not rendering for last 2 chunks might mean that something is going wrong in the back end, so results might be inaccurate.
+
+Results for backtransforms of mm_trail model:
+
+Backtransformed linear combination(s) of Colonization estimate(s) Estimate SE LinComb (Intercept) 0.465 0.0703 -0.142 1
+
+Transformation: logistic Backtransformed linear combination(s) of Extinction estimate(s)
+
+Estimate SE LinComb (Intercept) 0.0725 0.0281 -2.55 1
+:::
